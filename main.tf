@@ -198,30 +198,6 @@ resource "aws_security_group" "bayoucityclinic_rds_sg" {
     }
   
 }
-######################################
-# Application Load Balancer
-######################################
-
-resource "aws_lb" "bayoucityclinic_alb" {
-  name               = "bayoucityclinic-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.bayoucityclinic_alb_sg.id]
-  subnets            = [aws_subnet.Bayoucityclinic_public_subnet.id]
-
-  enable_deletion_protection = false
-
-  enable_http2 = true
-  enable_cross_zone_load_balancing = true
-
-  tags = {
-    Name = "bayoucityclinic_alb"
-    Owner = "Chris"
-    Environment = "Dev"
-    Project = "Bayoucityclinic"
-  }
-  
-}
 
 #######################################
 # Ec2 Instance
@@ -314,6 +290,31 @@ resource "aws_db_instance" "bayoucityclinici_rds" {
   
 }
 
+######################################
+# Application Load Balancer
+######################################
+
+resource "aws_lb" "bayoucityclinic_alb" {
+  name               = "bayoucityclinic-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.bayoucityclinic_alb_sg.id]
+  subnets            = [aws_subnet.Bayoucityclinic_public_subnet.id]
+
+  enable_deletion_protection = false
+
+  enable_http2 = true
+  enable_cross_zone_load_balancing = true
+
+  tags = {
+    Name = "bayoucityclinic_alb"
+    Owner = "Chris"
+    Environment = "Dev"
+    Project = "Bayoucityclinic"
+  }
+  
+}
+
 #######################################
 # ALB Target Group w/ attachment
 #######################################
@@ -344,6 +345,96 @@ resource "aws_lb_target_group" "bayoucityclinic_alb_tg" {
 
 resource "aws_lb_target_group_attachment" "bayoucityclinic_alb_tg_attachment" {
     target_group_arn = aws_lb_target_group.bayoucityclinic_alb_tg.arn
-    target_id = aws_instace.bayoucityclinic_openEMR_instance.id
+    target_id = aws_instance.bayoucityclinic_openEMR_instance.id
     port = 80
   }
+
+########################################
+# ALB Listener
+########################################
+
+resource "aws_lb_listener" "bayoucityclinic_alb_listener" {
+    load_balancer_arn = aws_lb.bayoucityclinic_alb.arn
+    port = 443
+    protocol = "HTTPS"
+    
+    ssl_policy = "ELBSecurityPolicy-TLS13-1-0-2021-06"
+    certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/your-certificate-id"
+
+    default_action {
+        type = "forward"
+        target_group_arn = aws_lb_target_group.bayoucityclinic_alb_tg.arn
+    }
+
+    tags = {
+      Name = "bayoucityclinic_alb_listener"
+      Owner = "Chris"
+      Environment = "Dev"
+      Project = "Bayoucityclinic"
+    }
+  
+}
+
+########################################
+# Route53 Hosted Zone
+########################################
+# NOTE:
+# Domain 'bayoucityclinic.xyz' was originally registered through Namecheap.
+# We are migrating DNS management to AWS Route 53 for full infrastructure-as-code (IaC) control.
+# After creating this hosted zone, update the domain's nameservers in Namecheap
+# to match the Route 53 nameservers listed in the AWS Console under this hosted zone.
+
+resource "aws_route53_zone" "bayoucityclinic_zone" {
+    name = "bayoucityclinic.xyz"
+    comment = "Hosted zone for bayoucityclinic.xyz"
+
+    tags = {
+      Name = "bayoucityclinic_zone"
+      Owner = "Chris"
+      Environment = "Dev"
+      Project = "Bayoucityclinic"
+    }
+  
+}
+
+
+########################################
+# ACM Certificate w/ route53 record and validation
+########################################
+
+resource "aws_acm_certificate" "openemr_cert" {
+    domain_name = "openemr.app.bayoucityclinic.xyz"
+    validation_method = "DNS"
+
+    tags = {
+      Name = "bayoucityclinic_acm_cert"
+      Owner = "Chris"
+      Environment = "Dev"
+      Project = "Bayoucityclinic"
+    }
+  
+}
+
+resource "aws_route53_record" "openemr_cert_dns_record" {
+    zone_id = aws_route53_zone.bayoucityclinic_zone.zone_id
+    name    = aws_acm_certificate.openemr_cert.domain_validation_options[0].resource_record_name
+    type    = aws_acm_certificate.openemr_cert.domain_validation_options[0].resource_record_type
+    ttl     = 60
+    records = [aws_acm_certificate.openemr_cert.domain_validation_options[0].resource_record_value]
+
+    depends_on = [aws_acm_certificate.openemr_cert]
+  
+}
+
+resource "aws_route53_record" "openemr_alb_alias" {
+    zone_id = aws_route53_zone.bayoucityclinic_zone.zone_id
+    name    = "openemr.app.bayoucityclinic.xyz"
+    type    = "A"
+    alias {
+        name                   = aws_lb.bayoucityclinic_alb.dns_name
+        zone_id                = aws_lb.bayoucityclinic_alb.zone_id
+        evaluate_target_health = true
+    }
+    ttl     = 60
+  
+}
